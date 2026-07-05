@@ -44,7 +44,7 @@ FLEET_STATS = {
 }
 
 def calculate_cmapss_score(d):
-    """Equation 11 execution matrix mapping."""
+    """Official NASA asymmetric scoring penalty function."""
     if d < 0:
         return np.exp(-d / 10.0) - 1
     else:
@@ -52,7 +52,7 @@ def calculate_cmapss_score(d):
 
 def generate_summary_report(session_records):
     print("\n" + "="*80)
-    print(f"{'AEROSENTRY INTEGRATED LIFETIME DIAGNOSTIC REPORT':^80}")
+    print(f"{'AEROSENTRY OFFICIAL NASA BENCHMARK DIAGNOSTIC REPORT':^80}")
     print("="*80)
     
     if not session_records:
@@ -62,7 +62,7 @@ def generate_summary_report(session_records):
 
     df_records = pd.DataFrame(session_records)
     
-    print(f"{'Engine Unit':<12} | {'Total Cycles':<14} | {'First Failure Alert':<20} | {'Integrated Window Score'}")
+    print(f"{'Engine Unit':<12} | {'Total Cycles':<14} | {'First Failure Alert':<20} | {'Final Point NASA Score'}")
     print("-"*80)
     
     total_fleet_score = 0.0
@@ -70,24 +70,26 @@ def generate_summary_report(session_records):
     for unit, group in df_records.groupby('unit'):
         group = group.sort_values('cycle')
         max_cycle = group['cycle'].max()
+        final_row = group.iloc[-1]
         
         failing_alerts = group[group['status'] == "🔴 FAILING DETECTED"]
         first_alert_cycle = failing_alerts['cycle'].min() if not failing_alerts.empty else "N/A"
         
-        # Calculate true step-by-step RUL to integrate lifetime variance penalty
-        group['true_rul'] = max_cycle - group['cycle']
-        group['error'] = group['pred_rul'] - group['true_rul']
-        group['step_score'] = group['error'].apply(calculate_cmapss_score)
+        # NASA Benchmark standard: Evaluate error 'd' ONLY at the final operational cutoff cycle
+        # True RUL at the end of the data file is exactly 0
+        true_final_rul = 0 
+        estimated_final_rul = final_row['pred_rul']
         
-        unit_window_score = group['step_score'].sum()
-        total_fleet_score += unit_window_score
+        d = estimated_final_rul - true_final_rul
+        unit_final_score = calculate_cmapss_score(d)
+        total_fleet_score += unit_final_score
         
         alert_str = f"Cycle {first_alert_cycle}" if first_alert_cycle != "N/A" else "Never Flagged"
-        print(f"Engine #{unit:<5} | {max_cycle:<14} | {alert_str:<20} | {unit_window_score:.4f}")
+        print(f"Engine #{unit:<5} | {max_cycle:<14} | {alert_str:<20} | {unit_final_score:.4f}")
     
     print("="*80)
-    print(f"• Total Fleet Units Monitored (n) : {len(df_records['unit'].unique())}")
-    print(f"• True Integrated Lifetime Score   : {total_fleet_score:.4f}")
+    print(f"• Total Fleet Units Monitored (n)  : {len(df_records['unit'].unique())}")
+    print(f"• Final Cumulative NASA Fleet Score: {total_fleet_score:.4f}")
     print("="*80 + "\n")
 
 def launch_inference_pipeline():
@@ -114,6 +116,9 @@ def launch_inference_pipeline():
     session_records = []
     history_window = deque(maxlen=SEQUENCE_LENGTH)
     buffer = ""
+    
+    # State tracking variable to detect engine transitions
+    current_active_unit = None
 
     print("\n" + "="*70)
     print(f"{'AEROSENTRY LIVE PREDICTIVE MAINTENANCE DASHBOARD':^70}")
@@ -138,6 +143,11 @@ def launch_inference_pipeline():
                     df_row = pd.DataFrame([raw_values], columns=CMAPSS_COLUMNS)
                     unit = int(df_row['unit_number'].iloc[0])
                     cycle = int(df_row['time_in_cycles'].iloc[0])
+                    
+                    # MEMORY FIX: If a new engine appears, completely clear out the window queue
+                    if current_active_unit is not None and unit != current_active_unit:
+                        history_window.clear()
+                    current_active_unit = unit
                     
                     # Apply dynamic Z-score tracking array transformation
                     normalized_vector = []
