@@ -3,4 +3,4 @@ data/
 *.txt
 __pycache__/
 .vscode/
-*.txt
+
